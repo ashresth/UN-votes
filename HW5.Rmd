@@ -1,0 +1,720 @@
+---
+title: "Allies and Enemies"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(knitr)
+library(broom)
+library(tidyr)
+library(caret)
+```
+
+**This homework is due Sunday April 10, 2016 at 11:59PM EST. When complete, submit your code in an R Markdown file and the knitted HTML via GitHub.**
+
+# Introduction 
+
+The United Nations (UN) is an intergovernmental organization 
+founded in 1946 to promote international cooperation. It now 
+represents 193 member states. The General Assembly is the largest 
+body, with a seat for every member of the UN. It discusses 
+topics of international importance such as maintaining peace 
+and security, providing humanitarian aid, and protecting human rights. 
+
+We will be analyzing a dataset containing the full history of 
+General Assembly votes by each country to determine what 
+countries vote similarly and which do not. We will also 
+explore how this changes through time.
+
+
+# Problem 1
+
+We'll start by loading the United Nations voting data into R 
+and performing some data wrangling. We use data from this paper:
+
+> Voeten, Erik; Strezhnev, Anton; Bailey, Michael, 2009, "United Nations General Assembly Voting Data", http://hdl.handle.net/1902.1/12379, Harvard Dataverse, V11
+
+In this problem, we will combine information from three sources 
+to create the datasets that we will use to study voting behavior.
+
+### Problem 1A
+
+We have learned how to import text files into R. Here we are 
+going to load a data object that is saved to a file. To get 
+an idea of how this works try the following:
+
+```{r}
+temp_filename <- tempfile() ## creaate tempory file name
+temp_object <- 1:5 ## create an R object
+save(temp_object, file=temp_filename) ## save the r object to file
+rm(temp_object) ## remove object
+load(temp_filename) ## load object from file
+temp_object ## note that it's back
+```
+
+We usually use the suffix `.RData` or `.rda` for these objects. 
+
+The data for this project is stored as an `.RData` file. Go to 
+[this web page](https://dataverse.harvard.edu/dataset.xhtml?persistentId=hdl:1902.1/12379). 
+To get the `.RData` file, click on the Download button for 
+`rawvotingdata13.tab` and choose the `RData format`.
+
+To load the data set into R, use the `load()` function.
+Define the name of the object as `x` (but do NOT print it 
+out as it has over 1 million rows).
+
+```{r}
+setwd("~/Documents/HSPH Spring 2016/BIO 260 Data Science/ashresth-2016HW5")
+load("rawvotingdata13.rdata")
+```
+
+
+### Problem 1B
+
+The first problem to overcome is that if you try to print 
+this object, it will crash your R session -- it's just that 
+big! (`r nrow(x)` rows). So first wrap it in `tbl_df(x)`,
+and call it `votes`. After doing this you can erase `x` with `rm(x)`.
+
+```{r}
+nrow(x)
+votes <- tbl_df(x)
+rm(x)
+```
+
+
+### Problem 1C
+
+We note that the data is already arranged according to the 
+rules of tidy data. There is one row for each observation 
+and one column for each variable. 
+
+Download the `Codebook.pdf` file from [this page](https://dataverse.harvard.edu/dataset.xhtml?persistentId=hdl:1902.1/12379). 
+How would you interpret the vote column? How many of each 
+kind of vote are in this dataset? 
+
+```{r}
+paste("The vote column contains numbers that correspond to the vote choice by the country for a particular issue. According to the codebook, 1 – Yes, 2 – Abstain, 3 – No, 8 – Absent, 9 – Not a member")
+
+votes %>%
+  group_by(vote) %>%
+  summarise(num_of_votes = n())
+```
+
+
+Of the five types of votes, which three would provide information 
+about the country's position on an issue? Which two would not?
+
+**Your answer here**: Of the five types, vote choices 1, 2 and 3 would provide information about the country's position on an issue. Choices 8 and 9 would not. 
+
+
+Filter out the types of votes that do not provide information 
+about our countries position on an issue from our dataset.
+
+```{r}
+votes <- filter(votes, vote %in% c(1,2,3))
+```
+
+
+### Problem 1D 
+
+According to the codebook, which column represents countries? 
+What type of unique code is used to represent each country?
+
+**Your answer here**:  The 'ccode' column represents countries. Each country is represented using its COW (Correlates of War) code.
+
+Create new `country` column that contains country names 
+based on this column. Hint: check out the [countrycode](https://cran.r-project.org/web/packages/countrycode/countrycode.pdf) 
+package. 
+
+
+```{r}
+library(countrycode)
+votes <- mutate(votes, country = countrycode(ccode, "cown", "country.name"))
+```
+
+
+### Problem 1E
+
+Before continuing let's wrangle the country names a bit. We are 
+renaming countries with long names and renaming Congo to 
+distinguish it from Democratic Republic of Congo. We make use 
+of the powerful remapping function `revalue()` from `plyr` 
+package. You should **not** load `plyr` though as it will 
+create confusion with `dplyr` functions.
+
+```{r}
+library(tidyr)
+mapping <- c("United States"="USA",
+          "United Kingdom"="UK",
+          "Korea, Republic of"="South Korea",
+          "Lao People's Democratic Republic"="Laos",
+          "Yemen People's Republic"="South Yemen",
+          "Saint Vincent and the Grenadines"="Saint Vincent",
+          "Congo"="Congo Republic")
+votes <- votes %>% mutate(country = plyr::revalue(country, mapping)) %>%
+  separate(country, into = c("country", "extra"), sep=",", fill="right")
+```
+
+Right now we have information about how every country voted 
+on every resolution. But we do not have any information about
+the resolutions themselves (e.g. not what their title or topic
+was, or what date they were voted on). 
+Next, we will bring this data in as well.
+
+This data is provided as `descriptions.csv`. 
+Read it in using the `readr` package and wrangle it as shown below:
+
+```{r}
+library(readr)
+
+url <- "https://raw.githubusercontent.com/datasciencelabs/data/master/un-resolutions-descriptions.csv"
+descriptions <- read_csv(url, col_types = list(date = col_date("%m/%d/%y")))
+
+## from warning and looking at csv we see
+## line 1483 has an extra "
+## it's supposed to be a 0
+descriptions[1483,"ec"] <-0
+
+library(lubridate)
+y <- year(descriptions$date)
+year(descriptions$date) <- ifelse(y > 2030, y - 100, y)
+```
+
+Count the number of votes that were taken in each year. 
+Create a line graph of the number of votes per year.
+
+```{r}
+#create a new year column and count the number of roll calls in each year after grouping by year
+descriptions %>%
+  mutate(year = year(date)) %>%
+  group_by(year) %>%
+  summarise(yearly_votes = n()) %>%
+  ggplot(aes(x = year, y = yearly_votes)) + geom_line() +
+  labs(title = "Total Votes by Year", x = "Year", y = "Total Votes")
+
+```
+
+
+What year would we want to filter out from the dataset 
+because there was only one vote? 
+
+**Your answer here**: The last year in the dataset seems to have the least vote. So we might want to filter out 2015 because there was only 1 vote.
+
+Filter it out now.
+
+```{r}
+#check if 2015 did have only one vote
+descriptions %>%
+  mutate(year = year(date)) %>%
+  group_by(year) %>%
+  summarise(yearly_votes = n()) %>%
+  filter(year == 2015)
+#filter out the year 2015
+descriptions <- filter(descriptions, year(date) != 2015)
+```
+
+
+### Problem 1F
+
+Read the `Codebook.pdf` about this dataset. Who classified certain votes 
+as "important"? 
+
+**Your answer here**: Votes were classified as important by U.S. State Department.
+
+What percent of votes in history were categorized as "important"?
+
+```{r}
+paste(round(mean(descriptions$importantvote)*100, 2), "percent of votes were categorized as important.")
+```
+
+
+The most interesting analyses can be done by combining the description 
+and country-voting data.
+
+Join the `description` and country-voting data (`votes`) to create a new 
+data set. Remove the `yes`, `no`, and `abstain` columns from the 
+`description` dataset. These are per-vote summaries that we do not 
+need any more (and could be misleading). The final dataset should be called 
+`votes`, which you will continue to use throughout the homework. 
+
+```{r}
+votes <- select(descriptions, -abstain, -no, -yes) %>%
+  right_join(votes, by = c("rcid"="rcid"))
+#some sessions IDs don't match between the two datasets
+which(votes$session.x!=votes$session.y)
+```
+
+
+
+# Problem 2
+
+### Problem 2A
+
+Canada and the US have been allies since the UN was created. 
+We can create a matrix of all votes for these two countries using 
+the `spread()` function in `tidyr` package like this:
+
+```{r}
+library(tidyr)
+y <- votes %>% 
+  filter(country %in% c("USA", "Canada")) %>%
+  mutate(year = year(date)) %>%
+  select(rcid, year, importantvote, country, vote) %>%
+  spread(country, vote)
+```
+
+We can see how often they have voted together in important votes 
+and not-important votes:
+
+```{r}
+y %>% 
+  group_by(importantvote) %>% 
+  summarize(mean(USA==Canada, na.rm=TRUE))
+```
+
+Compute the percentage in which the US and Canada
+voted the same. Calculate this percentage for each year and call it 
+`agreement`. Fit a linear model using `lm()` to predict `agreement`
+with `year`. 
+
+```{r}
+us_can <- y %>%
+  group_by(year) %>%
+  summarise(agreement = round(mean(USA==Canada, na.rm=TRUE)*100, 2))%>%
+  filter(!is.na(agreement) & !is.na(year))
+summary(lm(agreement ~ year, data = us_can))
+```
+
+What is the trend predicted by the linear model? 
+Is it statistically significant?
+
+**Your answer here**: According to the linear model, the agreement between USA and Canada decreased by 0.70 percent for each 1 year increase. The trend is highly statistically significant (p <0.001).
+
+### Problem 2B
+
+In the previous problem we found a negative trend in the agreement 
+between the USA and Canada throughout the years. Interpreting this 
+linear model would imply that disagreement between these two counties 
+was worse during the Clinton administration (1992-2000) than the 
+Reagan administration (1980-1988). 
+
+Now, instead of blindly interpreting the regression results, 
+plot the data and use a smoother to estimate a trend. Based on this 
+analysis, how do thes Regan and Clinton administrations compare? 
+
+**Hint**: Make sure to pick a window size or span that creates 
+a trend that goes through data.
+
+```{r}
+#create dataframe that defines the two administrations
+df<-data.frame(xmin=c(1980, 1992),
+               xmax=c(1988, 2000),
+               ymin=c(-Inf,-Inf),
+               ymax=c(Inf, Inf),
+               Administration=c("Reagan","Clinton"))
+
+#list of spans to try
+spans <- c(0.1, 0.25, 0.5, 0.75)
+
+#get fits for the different spans
+fits <- data_frame(span = spans) %>% 
+  group_by(span) %>% 
+  do(augment(loess(agreement~year, degree=1, span = .$span, data=us_can)))
+
+#plot
+ggplot(us_can, aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = fits, color = "red") +
+  facet_wrap(~span) +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green"))
+
+#span = 0.25 looks like it follows the trend without overfitting
+span = 0.25
+can_fits <- augment(loess(agreement~year, degree=1, span = span, data=us_can))
+ggplot(us_can, aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = can_fits, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and Canada", title = "Agreement between USA and Canada")
+
+```
+
+**Your answer here**: Once we use the loess smoother, we can see that the agreement between US and Canada decreased sharply along the Reagan administration. The agreement was beginning to show upward trend towards the start of the Clinton administration. The upward trend continued until halfway through the administration and then started to decrease slightly towards the end.
+
+### Problem 2C
+
+Make the plot above for the agreement through time between the US
+and the following countries: Israel, UK, Mexico, Cuba, and China. 
+Make two plots: one for important votes to non-important votes. 
+
+```{r, warning=FALSE}
+library(grid)
+library(gridExtra)
+#I will keep the span at 0.25 unless I see a bad fit in the data
+#create a datafram of votes for US and the countries we are trying to check agreement
+us_countries <- votes %>% 
+  filter(country %in% c("USA", "Canada", "Israel", "UK", "Mexico", "Cuba", "China")) %>%
+  mutate(year = year(date)) %>%
+  select(rcid, year, importantvote, country, vote) %>%
+  spread(country, vote) %>%
+  group_by(year, importantvote)
+  
+#Israel
+us_isr <- us_countries %>%
+  summarise(agreement = round(mean(USA==Israel, na.rm=TRUE)*100, 2)) %>%
+  filter(!is.na(agreement) & !is.na(year))
+isr_fits0 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_isr, importantvote==0)))
+isr_fits1 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_isr, importantvote==1)))
+#non-important votes
+imp0 <- us_isr %>%
+  filter(importantvote==0) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = isr_fits0, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  theme(legend.position="none") +
+  labs(x = "Year", y = "Percent Agreement between USA and Israel", title = "Non-Important Votes") + 
+  ylim(0,100)
+#important votes
+imp1 <- us_isr %>%
+  filter(importantvote==1) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = isr_fits1, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and Israel", title = "Important Votes") + 
+  ylim(0,100)
+
+grid.arrange(imp0, imp1, ncol=2, top=textGrob("Agreement between USA and Israel", gp=gpar(fontsize=25,font=8)))
+
+#UK
+us_uk <- us_countries %>%
+  summarise(agreement = round(mean(USA==UK, na.rm=TRUE)*100, 2)) %>%
+  filter(!is.na(agreement) & !is.na(year))
+uk_fits0 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_uk, importantvote==0)))
+uk_fits1 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_uk, importantvote==1)))
+
+imp0 <- us_uk %>%
+  filter(importantvote==0) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = uk_fits0, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  theme(legend.position="none") +
+  labs(x = "Year", y = "Percent Agreement between USA and UK", title = "Non-Important Votes") + 
+  ylim(0,100)
+
+imp1 <- us_uk %>%
+  filter(importantvote==1) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = uk_fits1, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and UK", title = "Important Votes") + 
+  ylim(0,100)
+
+grid.arrange(imp0, imp1, ncol=2, top=textGrob("Agreement between USA and UK", gp=gpar(fontsize=25,font=8)))
+
+#Mexico
+us_mex <- us_countries %>%
+  summarise(agreement = round(mean(USA==Mexico, na.rm=TRUE)*100, 2)) %>%
+  filter(!is.na(agreement) & !is.na(year))
+mex_fits0 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_mex, importantvote==0)))
+mex_fits1 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_mex, importantvote==1)))
+
+imp0 <- us_mex %>%
+  filter(importantvote==0) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = mex_fits0, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  theme(legend.position="none") +
+  labs(x = "Year", y = "Percent Agreement between USA and Mexico", title = "Non-Important Votes") + 
+  ylim(0,100)
+
+imp1 <- us_mex %>%
+  filter(importantvote==1) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = mex_fits1, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and Mexico", title = "Important Votes") + 
+  ylim(0,100)
+
+grid.arrange(imp0, imp1, ncol=2, top=textGrob("Agreement between USA and Mexico", gp=gpar(fontsize=25,font=8)))
+
+#Cuba
+us_cub <- us_countries %>%
+  summarise(agreement = round(mean(USA==Cuba, na.rm=TRUE)*100, 2)) %>%
+  filter(!is.na(agreement) & !is.na(year))
+cub_fits0 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_cub, importantvote==0)))
+cub_fits1 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_cub, importantvote==1)))
+
+imp0 <- us_cub %>%
+  filter(importantvote==0) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = cub_fits0, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  theme(legend.position="none") +
+  labs(x = "Year", y = "Percent Agreement between USA and Cuba", title = "Non-Important Votes") + 
+  ylim(0,100)
+
+imp1 <- us_cub %>%
+  filter(importantvote==1) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = cub_fits1, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and Cuba", title = "Important Votes") + 
+  ylim(0,100)
+
+grid.arrange(imp0, imp1, ncol=2, top=textGrob("Agreement between USA and Cuba", gp=gpar(fontsize=25,font=8)))
+
+#China
+us_chi <- us_countries %>%
+  summarise(agreement = round(mean(USA==China, na.rm=TRUE)*100, 2)) %>%
+  filter(!is.na(agreement) & !is.na(year))
+chi_fits0 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_chi, importantvote==0)))
+chi_fits1 <- augment(loess(agreement~year, degree=1, span = span, data=filter(us_chi, importantvote==1)))
+
+imp0 <- us_chi %>%
+  filter(importantvote==0) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = chi_fits0, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  theme(legend.position="none") +
+  labs(x = "Year", y = "Percent Agreement between USA and China", title = "Non-Important Votes") + 
+  ylim(0,100)
+
+imp1 <- us_chi %>%
+  filter(importantvote==1) %>%
+  ggplot(aes(year, agreement)) +
+  geom_point(shape=1,cex=1) +
+  geom_line(aes(x=year, y = .fitted, frame = year, cumulative = TRUE), data = chi_fits1, color = "red") +
+  geom_rect(data=df,aes(xmin=xmin,ymin=ymin,xmax=xmax,ymax=ymax,fill=Administration),
+            alpha=0.2,inherit.aes=FALSE)+
+  scale_fill_manual(values=c("blue","green")) +
+  labs(x = "Year", y = "Percent Agreement between USA and China", title = "Important Votes") + 
+  ylim(0,100)
+
+grid.arrange(imp0, imp1, ncol=2, top=textGrob("Agreement between USA and China", gp=gpar(fontsize=25,font=8)))
+
+```
+
+Describe the observed patterns.
+
+**Your answer here**:
+
+***Israel (Non-Important Votes)***: The agreement between USA and Israel showed a downward trend during the Reagan administration and an upward trend during the Clinton administration.
+
+***Israel (Important Votes)***: The USA and Israel had high level of agreement during both administrations. The agreement showed an almost flat during the Reagan administration that started to decline towards the end. It showed an upward trend during the beginning of Clinton administration which declined towards the end as well.
+
+***UK (Non-Important Votes)***: The agreement between USA and UK showed a downward trend during the Reagan administration and the Clinton administration.
+
+***UK (Important Votes)***: The agreement between USA and UK showed a downward trend during the Reagan administration. It showed an upward trend during the beginning of Clinton administration which declined sharply towards the end.
+
+***Mexico (Non-Important Votes)***: The USA and Mexico had low level of agreement during both administrations. The agreement showed an downward trend during the Reagan administration. It showed an upward trend during the beginning of Clinton administration which flattened out towards the end.
+
+***Mexico (Important Votes)***: The agreement between USA and Mexico showed a upward trend during the Reagan administration. It showed an upward trend during the beginning of Clinton administration which declined towards the end.
+
+***Cuba (Non-Important Votes)***: The USA and Cuba had low level of agreement during both administrations. The agreement showed an downward trend during the Reagan administration. It showed an slight upward trend during the beginning of Clinton administration which flattened out towards the end.
+
+***Cuba (Important Votes)***: The USA and Cuba had low level of agreement during both administrations. The agreement showed a flat trend during the Reagan administration and had started to climb up slightly towards the end. Similarly, the trend was almost flat towards the beginning of Clinton administration but started climibing up soon after.
+
+***China (Non-Important Votes)***: The USA and China had low level of agreement during both administrations. The agreement showed an downward trend during the Reagan administration. It showed an slight upward trend during the beginning of Clinton administration which strated declining towards the end.
+
+***China (Important Votes)***: The USA and China had low level of agreement during both administrations. The agreement showed a downward trend during the Reagan administration. The trend was still declining towards the beginning of Clinton administration but started to steady during the administration with a slight upward trend towards the end.
+
+# Problem 3
+
+In this problem, we will focus only on important votes. 
+To get a better idea of who votes together we can compute a 
+distance between each country. We will focus on countries that 
+voted more than 95% of time in the 368 votes
+
+```{r}
+countries <- votes %>% 
+                filter(importantvote==1) %>% 
+                group_by(country) %>% 
+                summarize(p=n()/368) %>% 
+                filter(p>=0.95) %>% 
+                .$country
+```
+
+We can create a matrix with all the votes using the `spread()` function:
+
+```{r}
+tmp <- votes %>% 
+    filter(country %in% countries & year(date) >= 1980 & importantvote == 1) %>%
+    select(rcid, country, vote) %>% 
+    spread(country, vote) 
+
+X <- as.matrix(tmp[,-1])
+rownames(X) <- tmp$rcid
+```
+
+### Problem 3A
+
+Create a distance matrix between each country. Call this matrix `d`. 
+
+**Hint**: Use the `dist()` function, but note that `X` has 
+countries in the columns and `dist()` computes distances between rows. 
+Look at the `dist` help file for more infomration. 
+You can use the default `method = "Euclidean"` in the `dist()` function. 
+You can switch rows to columns using the `t()` (transpose) function. 
+Finally, once you create the distance matrix `d` you can 
+visualize it using `heatmap()` or `hclust()`.
+
+```{r}
+#plot distances to countries as a matrix
+Y <- t(X)
+d <- dist(Y, method = "euclidean")
+heatmap(as.matrix(d))
+
+par(cex=0.6, mar=c(5, 8, 4, 1))
+plot(hclust(d), xlab="", ylab="", main="", sub="", axes=FALSE)
+par(cex=1)
+title(xlab="d", ylab="Height", main="Cluster Dendogram")
+axis(2)
+
+#from the heatmap and cluster, Israel looks closest to the US. It's hard to tell which country is the furthest.
+#to check distance to the US, which.max will give the farthest but which.min will just return US
+#can sort the distances to the US instead
+us_dist <- sort(as.matrix(d)["USA",])
+#closest to US
+us_dist[2]
+#farthest from US
+us_dist[length(us_dist)]
+#OR
+which.max(us_dist)
+```
+
+
+What country is closest to US? Which is furthest?
+
+**Your answer here**: Israel is closest to the US and Cuba is the furthest.
+
+
+### Problem 3B
+
+Given how close some countries are and how far others are to US in voting,
+we should be able to predict how the US will vote based on others. 
+Let's try to implement a machine learning algorithm to do this. 
+
+Use the `votes` data set to create a new dataset with seven columns. 
+One column will represent the USA vote as the outcome (call it `y`) and
+the last six columns will be the vote from the six countries examined 
+above in Problem 2 (include Canada), which will be used a predictors 
+in our machine learning algorithm. Only consider the important votes. 
+In the column for the USA vote column (`y`), remove the `Abstain` votes and
+only consider the `Yes` and `No` votes from the USA. Tranform the USA vote
+column (`y`) to contain only 0s and 1s where 0 = `No` vote and 1 = `Yes` vote.
+
+```{r}
+#filter just the important votes from the dataframe in Problem 2
+#need to remove NA's for the knn3 method later, removing them now to keep consistent between glm and knn
+us_countries_imp1 <- us_countries %>%
+  ungroup %>%
+  filter(importantvote == 1 & USA !=2) %>%
+  select(Canada:USA) %>%
+  mutate(y = ifelse(USA == 1, 1, 0)) %>%
+  select(-USA) %>%
+  filter(!is.na(Canada) & !is.na(China) & !is.na(Cuba) & !is.na(Israel) & !is.na(Mexico) & !is.na(UK))
+
+```
+
+Use the `caret` R package to split the data into a training set with 
+80% of data and a test set with the remaing 20%. 
+Then use `glm()` to build a model. What is the accuracy?
+
+```{r}
+set.seed(1)
+#create partition
+inTrain <- createDataPartition(y = us_countries_imp1$y, p=0.8)
+train_set <- slice(us_countries_imp1, inTrain$Resample1) 
+test_set <- slice(us_countries_imp1, -inTrain$Resample1) 
+#get fits for training set
+fit <-  glm(y~ ., data=train_set, family="binomial")
+#predict for test
+pred <- predict(fit, newdata = test_set, type="response")
+#confusion matrix
+tab <- table(pred=round(pred), truth= test_set$y)
+conf_matrix <- confusionMatrix(tab)
+conf_matrix$table
+paste("The accuracy is", round(conf_matrix$overall["Accuracy"]*100, 2), "percent.")
+```
+
+### Problem 3C 
+
+We see that obtain a very high accuracy, but note that this is a 
+random variable due to the random split of our data. 
+Try 10 new random splits and report on how much our accuracy changes.
+
+```{r, warning=FALSE}
+#10 repetitions using replicate
+accuracy <- replicate(10, {
+  inTrain <- createDataPartition(y = us_countries_imp1$y, p=0.8)
+  train_set <- slice(us_countries_imp1, inTrain$Resample1)
+  test_set <- slice(us_countries_imp1, -inTrain$Resample1)
+  fit <-  glm(y~., data=train_set, family="binomial")
+  pred <- predict(fit, newdata = test_set, type="response")
+  tab <- table(pred=round(pred), truth= test_set$y)
+  conf_matrix <- confusionMatrix(tab)
+  conf_matrix$overall["Accuracy"]
+})
+print("For the 10 different random splits, we get the following accuracies:")
+accuracy
+paste("The mean accuracy is", round(mean(accuracy)*100, 2), "percent.")
+```
+
+
+### Problem 3D 
+
+Compare your `glm()` model to a `knn()`. Use the `train()` function 
+to run 10 cross validations with leaving out 20% of the data. 
+Plot your results. 
+
+```{r}
+#set tuning controls - leaving our 20% of the data would need a 5-fold cv, repeat this 10 times
+control <- trainControl(method='repeatedcv', number = 5, repeats = 10)
+acc <- train(factor(y) ~ .,
+             data = us_countries_imp1,
+             method = "knn",
+             trControl = control,
+             tuneGrid=data.frame(k=seq(1,20, 1)),
+             metric="Accuracy")
+plot(acc)
+paste("The accuracy for all k's from 1-20 is higher than the mean for glm. If we pick k = 2, which has the highest accuracy accoring to the plot, the accuracy is", round(acc$results[2,]$Accuracy*100, 2))
+```
+
+How many nearest neighbors should we use?
+
+**Your answer here**: Judging from the plot of accuracies for the cross validation, we should use 2 nearest neighbors since it gives the highest accuracy. The accuracies are close for k between 1 and 3 so we could use any of these and the results should be similar.
